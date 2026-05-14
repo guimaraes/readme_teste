@@ -1,323 +1,384 @@
-# README — msfolhapastores-dev
+package com.porto.resi.core.multicalculo.dto;
 
-## Visão Geral
+import java.util.UUID;
 
-`msfolhapastores-dev` é uma aplicação **Java (JAX-RS/Jersey)** empacotada como **WAR** para cadastro e manutenção de entidades administrativas:
+public record CotacaoRecebidaResult(UUID multiOfertaId, UUID ofertaId) {
 
-* **Eventos**
-* **Formas de Recebimento**
-* **Fórmulas**
-* **Tipos de Dependente**
+    public static CotacaoRecebidaResult apenasMultiOferta(UUID multiOfertaId) {
+        return new CotacaoRecebidaResult(multiOfertaId, null);
+    }
+}
 
-O projeto utiliza **JDBC** com **Apache Commons DBCP 1.4** para pool de conexões e **Oracle** como banco de dados. Não usa Spring.
+package com.porto.resi.core.multicalculo.notifier;
 
-> **Atenção:** O sistema está em **modo de manutenção corretiva** (sem novas funcionalidades). Os mapeamentos de alguns endpoints **PUT** estão incorretos no código (documentado abaixo) e devem ser mantidos **como estão** até decisão explícita de correção.
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import com.porto.resi.core.multicalculo.port.CotacaoNotifierPort;
+import java.util.List;
+import java.util.UUID;
 
----
+public abstract class AbstractCotacaoNotifierTemplate<T extends BaseCotacaoRequest, M, C>
+        implements CotacaoNotifierPort<C> {
 
-## Stack e Ferramentas
-
-* **Java** 8 (JDK 1.8)
-* **Jersey** 2.x (JAX-RS)
-* **Maven** (empacotamento **WAR**)
-* **Oracle JDBC** (ojdbc5)
-* **Apache Commons DBCP** 1.4 (pool de conexões)
-* **Log4j 2 (API/Core)** com **configuração antiga** (`log4j.properties` estilo 1.x)
-* **Servlet Container**: Tomcat 8/9 (recomendado) ou compatível
-
-Estrutura de pacotes (alto nível):
-
-```
-br/com/folhapastores/
- ├─ controller/    # Endpoints REST (JAX-RS)
- ├─ logica/        # Regras de negócio
- ├─ dao/           # Acesso a dados via JDBC
- ├─ modelo/        # Modelos/DTOs
- ├─ utils/         # Utilitários (permissão, parsing, etc.)
- └─ filter/        # Filtros (API Key, Token, Permissões)
-```
-
----
-
-## Diagrama de Entidades Relacionais (conceitual)
-
-> O esquema abaixo representa o **modelo lógico** deduzido do código (DAOs e lógicas). Nomes de colunas podem variar conforme o ambiente; ajuste ao seu **DDL** real.
-
-```mermaid
-erDiagram
-    EVENTO {
-        int    cod_evento PK
-        int    seq_evento
-        int    cod_formula FK
-        date   dt_criacao
-        date   dt_atualizacao
+    @Override
+    public void enviarMensagemNovaCotacao(UUID multiOfertaId, List<C> cotacoes, BaseCotacaoRequest req) {
+        T request = convertRequest(req);
+        List<M> novasCotacoes = cotacoes.stream().map(c -> mapearCotacao(c, request)).toList();
+        enviarMensagem(multiOfertaId, novasCotacoes);
     }
 
-    EVENTO_IDIOMA {
-        int    cod_evento PK
-        int    cod_idioma PK
-        string den_evento
+    protected abstract T convertRequest(BaseCotacaoRequest request);
+
+    protected abstract M mapearCotacao(C cotacao, T request);
+
+    protected abstract void enviarMensagem(UUID multiOfertaId, List<M> novasCotacoes);
+}
+
+package com.porto.resi.core.multicalculo.port;
+
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoCallbackRequest;
+import java.util.UUID;
+
+public interface CallbackGravacaoPort {
+
+    void gravar(UUID multiOfertaId, BaseCotacaoCallbackRequest callback);
+}
+package com.porto.resi.core.multicalculo.port;
+
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import java.util.List;
+import java.util.UUID;
+
+public interface CotacaoNotifierPort<C> {
+
+    void enviarMensagemNovaCotacao(UUID multiOfertaId, List<C> cotacoes, BaseCotacaoRequest req);
+}
+package com.porto.resi.core.multicalculo.port;
+
+public interface OfertaPort<S, R> {
+
+    R enquadrar(S solicitacao);
+}
+package com.porto.resi.core.multicalculo.port;
+
+public interface ValidacaoCanalPort {
+
+    void validarSeNecessario(Integer codigoCanal, boolean validar);
+}
+
+package com.porto.resi.core.multicalculo.processor;
+
+import java.util.Objects;
+import java.util.UUID;
+import java.util.function.Function;
+
+public final class CorrelationIdStrategies {
+
+    private CorrelationIdStrategies() {}
+
+    public static <O> CorrelationIdStrategy<O> uuidAleatorioPorOferta() {
+        return ofertas -> ofertas.stream().map(o -> UUID.randomUUID()).toList();
     }
 
-    FORMA_RECEBTO {
-        int    cod_forma_recbto PK
-        date   dt_criacao
-        date   dt_atualizacao
+    public static <O> CorrelationIdStrategy<O> estavelPorExtrator(Function<O, UUID> idPorOferta) {
+        Objects.requireNonNull(idPorOferta, "idPorOferta");
+        return ofertas -> ofertas.stream().map(idPorOferta).toList();
+    }
+}
+package com.porto.resi.core.multicalculo.processor;
+
+import java.util.List;
+import java.util.UUID;
+
+@FunctionalInterface
+public interface CorrelationIdStrategy<O> {
+
+    List<UUID> buildIds(List<O> ofertas);
+}
+
+package com.porto.resi.core.multicalculo.processor;
+
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import java.util.List;
+import java.util.UUID;
+
+@FunctionalInterface
+public interface CotacaoBatchFactory<T extends BaseCotacaoRequest, O, E, RS, C> {
+
+    List<C> criar(
+            UUID multiOfertaId, List<O> ofertas, E enriquecimento, T request, RS reservaNumeroOrcamentoResponse);
+}
+package com.porto.resi.core.multicalculo.processor;
+
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import com.porto.resi.core.multicalculo.port.CotacaoNotifierPort;
+import java.util.List;
+import java.util.UUID;
+
+public final class CotacaoNotificacaoSupport {
+
+    private CotacaoNotificacaoSupport() {}
+
+    public static <T extends BaseCotacaoRequest, C> void notificarNovasCotacoes(
+            UUID multiOfertaId,
+            List<C> cotacoes,
+            T request,
+            CotacaoNotifierPort<C> cotacaoNotifier) {
+        cotacaoNotifier.enviarMensagemNovaCotacao(multiOfertaId, cotacoes, request);
+    }
+}
+
+package com.porto.resi.core.multicalculo.processor;
+
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import java.util.List;
+import java.util.UUID;
+
+public final class CotacaoProdutoProcessorSupport {
+
+    private CotacaoProdutoProcessorSupport() {}
+
+    public static <T extends BaseCotacaoRequest, O, RQ, RS, C, E> List<C> criarCotacoesComReserva(
+            UUID multiOfertaId,
+            T request,
+            List<O> ofertas,
+            E enriquecimentoResponse,
+            CorrelationIdStrategy<O> correlationIdStrategy,
+            ReservaPedidoFactory<T, RQ> pedidoFactory,
+            ReservaExecutor<RQ, RS> reservaExecutor,
+            CotacaoBatchFactory<T, O, E, RS, C> cotacaoBatchFactory,
+            boolean recalculo) {
+
+        List<UUID> correlationIds = correlationIdStrategy.buildIds(ofertas);
+        RQ pedido = pedidoFactory.criar(correlationIds, request, recalculo);
+        RS reserva = reservaExecutor.executar(multiOfertaId, pedido);
+        return cotacaoBatchFactory.criar(multiOfertaId, ofertas, enriquecimentoResponse, request, reserva);
+    }
+}
+
+package com.porto.resi.core.multicalculo.processor;
+
+import java.util.UUID;
+
+@FunctionalInterface
+public interface ReservaExecutor<RQ, RS> {
+
+    RS executar(UUID multiOfertaId, RQ pedido);
+}
+
+package com.porto.resi.core.multicalculo.processor;
+
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import java.util.List;
+import java.util.UUID;
+
+@FunctionalInterface
+public interface ReservaPedidoFactory<T extends BaseCotacaoRequest, RQ> {
+
+    RQ criar(List<UUID> correlationIds, T request, boolean recalculo);
+}
+
+package com.porto.resi.core.multicalculo.registry;
+
+import com.porto.resi.service.CotacaoProcessor;
+
+public interface IdentifiedCotacaoProcessor extends CotacaoProcessor {
+
+    String codigoProdutoMulticalculo();
+}
+
+package com.porto.resi.core.multicalculo.registry;
+
+import com.porto.resi.service.CotacaoProcessorForUpdate;
+
+public interface IdentifiedCotacaoProcessorForUpdate extends CotacaoProcessorForUpdate {
+
+    String codigoProdutoMulticalculo();
+}
+
+package com.porto.resi.core.multicalculo.registry;
+
+import com.porto.resi.service.CotacaoProcessor;
+import com.porto.resi.service.CotacaoProcessorForUpdate;
+import java.util.Collection;
+import java.util.Objects;
+
+public final class ProductRegistries {
+
+    private ProductRegistries() {}
+
+    public static void registrarIdentificados(
+            ProductRegistry<CotacaoProcessor> destino,
+            Collection<? extends IdentifiedCotacaoProcessor> implementacoes) {
+        Objects.requireNonNull(destino, "destino");
+        Objects.requireNonNull(implementacoes, "implementacoes");
+        for (IdentifiedCotacaoProcessor p : implementacoes) {
+            destino.registrar(p.codigoProdutoMulticalculo(), p);
+        }
     }
 
-    FORMA_RECEBTO_IDIOMA {
-        int    cod_forma_recbto PK
-        int    cod_idioma PK
-        string den_forma_recbto
+    public static void registrarIdentificadosForUpdate(
+            ProductRegistry<CotacaoProcessorForUpdate> destino,
+            Collection<? extends IdentifiedCotacaoProcessorForUpdate> implementacoes) {
+        Objects.requireNonNull(destino, "destino");
+        Objects.requireNonNull(implementacoes, "implementacoes");
+        for (IdentifiedCotacaoProcessorForUpdate p : implementacoes) {
+            destino.registrar(p.codigoProdutoMulticalculo(), p);
+        }
+    }
+}
+
+package com.porto.resi.core.multicalculo.registry;
+
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
+
+public final class ProductRegistry<V> {
+
+    private final Map<String, V> valores = new ConcurrentHashMap<>();
+
+    public void registrar(String codigoProduto, V valor) {
+        if (codigoProduto == null || codigoProduto.trim().isEmpty()) {
+            throw new IllegalArgumentException("codigoProduto invalido");
+        }
+        if (valor == null) {
+            throw new IllegalArgumentException("valor nao pode ser nulo");
+        }
+        valores.put(normalizar(codigoProduto), valor);
     }
 
-    FORMULA {
-        int    cod_formula PK
-        string den_formula
-        date   dt_criacao
-        date   dt_atualizacao
+    public Optional<V> buscar(String codigoProduto) {
+        if (codigoProduto == null) {
+            return Optional.empty();
+        }
+        return Optional.ofNullable(valores.get(normalizar(codigoProduto)));
     }
 
-    TIPO_DEPENDENTE {
-        int    cod_dependente_tipo PK
-        date   dt_criacao
-        date   dt_atualizacao
+    public V resolverObrigatorio(String codigoProduto) {
+        return buscar(codigoProduto).orElseThrow(() -> new IllegalStateException(
+                "Nenhuma implementacao registrada para o produto: " + codigoProduto));
     }
 
-    TIPO_DEPENDENTE_IDIOMA {
-        int    cod_dependente_tipo PK
-        int    cod_idioma PK
-        string den_dependente_tipo
+    public boolean contem(String codigoProduto) {
+        return codigoProduto != null && valores.containsKey(normalizar(codigoProduto));
     }
 
-    FORMULA ||--o{ EVENTO : referencia
-    EVENTO ||--o{ EVENTO_IDIOMA : possui
-    FORMA_RECEBTO ||--o{ FORMA_RECEBTO_IDIOMA : possui
-    TIPO_DEPENDENTE ||--o{ TIPO_DEPENDENTE_IDIOMA : possui
+    private static String normalizar(String codigo) {
+        return codigo.trim().toLowerCase();
+    }
+}
 
-```
+package com.porto.resi.core.multicalculo.service;
 
-**Observações funcionais importantes**
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoCallbackRequest;
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import com.porto.resi.core.multicalculo.dto.CotacaoRecebidaResult;
+import com.porto.resi.core.multicalculo.port.CallbackGravacaoPort;
+import com.porto.resi.service.CotacaoProcessor;
+import com.porto.resi.service.CotacaoProcessorForUpdate;
+import com.porto.resi.core.multicalculo.port.ValidacaoCanalPort;
+import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-* **Multilíngue**: `*_IDIOMA` guarda descrições por idioma (ex.: `cod_idioma` e `den_*`).
-* **Integridade/Unicidade**: recomenda-se **constraint única** por (chave, `cod_idioma`) para evitar duplicidades.
-* **Relação opcional** entre `EVENTO` e `FORMULA` (campo `cod_formula` pode ser nulo).
+public final class CotacaoProdutoServiceDelegate<T extends BaseCotacaoRequest> {
 
----
+    private static final Logger log = LoggerFactory.getLogger(CotacaoProdutoServiceDelegate.class);
 
-## Endpoints (como estão no código)
+    private final CallbackGravacaoPort callbackGravacaoPort;
+    private final ValidacaoCanalPort validacaoCanalPort;
 
-> **Respeitar exatamente o mapeamento atual** (mesmo quando semanticamente inadequado).
+    public CotacaoProdutoServiceDelegate(
+            CallbackGravacaoPort callbackGravacaoPort, ValidacaoCanalPort validacaoCanalPort) {
+        this.callbackGravacaoPort = callbackGravacaoPort;
+        this.validacaoCanalPort = validacaoCanalPort;
+    }
 
-### Eventos
+    public CotacaoRecebidaResult processarCotacoes(
+            T request,
+            CotacaoProcessor processor,
+            boolean validarCanal,
+            boolean callbackOpcional,
+            BaseCotacaoCallbackRequest callback) {
 
-* **POST** `/eventos/inserir` → Inserir eventos (multilíngue)
-* **PUT** `/eventos/inserir` → **Alterar** eventos *(mapeado como “/inserir” no código)*
+        validacaoCanalPort.validarSeNecessario(request.getCodigoCanal(), validarCanal);
 
-### Formas de Recebimento
+        UUID multiOfertaId = processor.processCotacoes(request);
+        log.info("Cotação processada com sucesso. MultiOferta ID: {}", multiOfertaId);
 
-* **POST** `/formaRecebto/inserir` → Inserir formas (multilíngue)
-* **PUT** `/formaRecebto/inserir` → **Alterar** formas *(mapeado como “/inserir” no código)*
+        gravarCallback(multiOfertaId, callbackOpcional, callback);
 
-### Fórmulas
+        return CotacaoRecebidaResult.apenasMultiOferta(multiOfertaId);
+    }
 
-* **POST** `/formulas/inserir` → Inserir fórmulas (validação de expressão)
-* **PUT** `/formulas/alterar` → Alterar fórmulas (validação de expressão)
+    public CotacaoRecebidaResult processarCotacao(
+            UUID multiOfertaId,
+            UUID cotacaoId,
+            T request,
+            CotacaoProcessorForUpdate processorForUpdate,
+            boolean validarCanal,
+            boolean callbackOpcional,
+            BaseCotacaoCallbackRequest callback) {
 
-### Tipos de Dependente
+        validacaoCanalPort.validarSeNecessario(request.getCodigoCanal(), validarCanal);
 
-* **POST** `/tipoDependente/inserir` → Inserir tipos (multilíngue)
-* **PUT** `/tipoDependente/inserir` → **Alterar** tipos *(mapeado como “/inserir” no código)*
+        UUID ofertaId = processorForUpdate.processCotacao(multiOfertaId, cotacaoId, request);
+        log.info("Cotação processada com sucesso. MultiOferta ID: {}", multiOfertaId);
 
-**Autorização/Permissão**
-Requer cabeçalhos e/ou tokens validados pelos filtros (`filter/`), além de checagens na camada `utils/Simplifying` (ex.: `"inserir"`, `"editar"` por módulo).
+        gravarCallback(multiOfertaId, callbackOpcional, callback);
 
----
+        return new CotacaoRecebidaResult(multiOfertaId, ofertaId);
+    }
 
-## Regras de Negócio (resumo)
+    private void gravarCallback(
+            UUID multiOfertaId, boolean callbackOpcional, BaseCotacaoCallbackRequest callback) {
+        if (callbackOpcional && callback == null) {
+            return;
+        }
+        callbackGravacaoPort.gravar(multiOfertaId, callback);
+        log.info("Callback gravado para o MultiOferta ID: {}", multiOfertaId);
+    }
+}
 
-* **Permissão**: toda operação passa por `validaPermissao(módulo, ação)`.
-* **Multilíngue**: inserção/alteração iterando as chaves de idioma do JSON enviado (`den_evento`, `den_forma_recbto`, `den_dependente_tipo`).
-* **Checagem de existência**: `DAO.isEntidadeExiste(obj, flagAlteracao)` antes de `INSERT/UPDATE`.
-* **Geração de IDs**: em **Eventos**, pode haver geração automática de `cod_evento`/`seq_evento` (dependendo da presença de `cod_formula` ou do fluxo).
-* **Fórmulas (crítico)**: validação textual da expressão **por blacklist** (ex.: DROP/DELETE/INSERT/GRANT/…); **não** há parser/whitelist.
+package com.porto.resi.core.multicalculo.telemetry;
 
-> **Limitação técnica**: as operações multilíngues **não são transacionais** por lote → risco de “meio commit” se falhar no meio.
+public final class NoOpTelemetryBridge implements TelemetryBridge {
 
----
+    public static final NoOpTelemetryBridge INSTANCE = new NoOpTelemetryBridge();
 
-## Pré-requisitos
+    private NoOpTelemetryBridge() {}
 
-* **JDK 8** instalado (`java -version`)
-* **Maven 3.6+** (`mvn -version`)
-* **Oracle** acessível (hostname, porta, SID/ServiceName)
-* **ojdbc5.jar** disponível no repositório Maven corporativo ou configurado como dependência
-* **Tomcat 8/9** (ou outro contêiner compatível)
+    @Override
+    public void recordEvent(String name, long durationNanos) {}
+}
 
----
+package com.porto.resi.core.multicalculo;
 
-## Configuração de Banco e Pool
+public final class MulticalculoProducts {
 
-As propriedades costumam ser carregadas por utilitários internos (ex.: `ConnectionFactory`, utils próprios). Adapte conforme seu ambiente:
+    public static final String RESIDENCIAL = "residencial";
+    public static final String ESSENCIAL = "essencial";
+    public static final String IMOBILIARIO = "imobiliario";
 
-**Exemplo de propriedades (Maven profile, `env` ou arquivo `.properties` da sua infra):**
+    private MulticalculoProducts() {}
+}
 
-```
-db.driver=oracle.jdbc.OracleDriver
-db.url=jdbc:oracle:thin:@//<HOST>:<PORT>/<SERVICE>
-db.username=<USUARIO>
-db.password=<SENHA>
+package com.porto.resi.service;
 
-# Pool (DBCP 1.4)
-db.pool.maxActive=20
-db.pool.maxIdle=10
-db.pool.minIdle=2
-db.pool.maxWait=30000
-```
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import java.util.UUID;
 
-> **Dica:** se o datasource for configurado no **Tomcat**, use um `JNDI` e ajuste a `ConnectionFactory` para buscar do contexto.
+public interface CotacaoProcessor {
 
----
+    UUID processCotacoes(BaseCotacaoRequest request);
+}
 
-## Build
+package com.porto.resi.service;
 
-Gerar o **WAR**:
+import com.porto.resi.commons.dto.core.base.request.BaseCotacaoRequest;
+import java.util.UUID;
 
-```bash
-mvn clean package -DskipTests
-```
+public interface CotacaoProcessorForUpdate {
 
-Artefato esperado:
-
-```
-target/msfolhapastores-dev.war
-```
-
----
-
-## Deploy (Tomcat)
-
-1. Copie `target/msfolhapastores-dev.war` para `<TOMCAT_HOME>/webapps/`.
-2. Inicie o Tomcat:
-
-   ```bash
-   <TOMCAT_HOME>/bin/startup.sh
-   ```
-3. Verifique logs:
-
-   ```
-   <TOMCAT_HOME>/logs/catalina.out
-   ```
-
----
-
-## Teste Rápido (cURL)
-
-> Ajuste **host/porta/context** conforme seu Tomcat (ex.: `http://localhost:8080/msfolhapastores-dev`).
-
-### Inserir Evento (multilíngue)
-
-```bash
-curl -X POST "http://localhost:8080/msfolhapastores-dev/eventos/inserir" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{
-        "cod_evento": 0,
-        "cod_formula": null,
-        "den_evento": {"pt-br": "Evento A", "en-us": "Event A"},
-        "permissao": {"acao": "inserir", "modulo": "evento"}
-      }'
-```
-
-### Alterar Evento (**mapeado como /inserir no PUT**)
-
-```bash
-curl -X PUT "http://localhost:8080/msfolhapastores-dev/eventos/inserir" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{
-        "cod_evento": 123,
-        "den_evento": {"pt-br": "Evento A (novo)"},
-        "permissao": {"acao": "editar", "modulo": "evento"}
-      }'
-```
-
-### Inserir Fórmula
-
-```bash
-curl -X POST "http://localhost:8080/msfolhapastores-dev/formulas/inserir" \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer <TOKEN>" \
-  -d '{
-        "cod_formula": 0,
-        "den_formula": "A + B * C",
-        "permissao": {"acao": "inserir", "modulo": "formula"}
-      }'
-```
-
-> **Erros comuns**: 403 (sem permissão), 409 (duplicidade), 400 (expressão inválida), 500 (erro interno/SQL).
-
----
-
-## Logs e Observabilidade
-
-* Dependências de **Log4j 2** com **arquivo de configuração legado** (`log4j.properties` 1.x).
-* Recomenda-se ajustar o `classpath` para garantir que a configuração ativa seja consistente; nivele `INFO` por padrão.
-
-**Boas práticas durante manutenção corretiva**:
-
-* Não logar PII/token em claro.
-* Adotar **correlação de requisições** (traceId simples em MDC, se possível).
-* Padronizar mensagens de erro ao cliente.
-
----
-
-## Operação e Manutenção (o que é necessário)
-
-* **Time**: 4 devs (2 sêniores + 2 plenos) dedicados a correções e pequenos ajustes.
-* **Procedimento**:
-
-  1. Criar **branch** para a correção.
-  2. Alterar **DAO/Logica** com **o mínimo necessário**.
-  3. Realizar **testes manuais** em base de homologação espelhada (foco em multilíngue).
-  4. Atualizar **changelog** e evidências (payloads de teste e respostas).
-  5. Gerar **WAR** e publicar em janela de manutenção.
-* **Riscos**:
-
-  * Duplicidade de registros por **race condition** (checa/existe → insere).
-  * **Meio commit** em operações multilíngues (sem transação por lote).
-  * Validação frágil de fórmulas (blacklist).
-
-> **Recomendação** (sem refatoração estrutural): quando possível, aplicar **constraint de unicidade** no banco e tratar **violação como 409**; e validar payloads no **controller** antes de acionar DAO.
-
----
-
-## Estrutura de Pastas (essencial)
-
-```
-msfolhapastores-dev/
- ├─ pom.xml
- ├─ src/
- │   ├─ br/com/folhapastores/controller/
- │   ├─ br/com/folhapastores/logica/
- │   ├─ br/com/folhapastores/dao/
- │   ├─ br/com/folhapastores/modelo/
- │   ├─ br/com/folhapastores/utils/
- │   └─ br/com/folhapastores/filter/
- └─ WebContent/
-     └─ WEB-INF/web.xml
-```
-
----
-
-## Notas Importantes
-
-* **Não alterar** mapeamentos de endpoints **neste momento** (ex.: `PUT /eventos/inserir` etc.).
-* Evitar **atualização de bibliotecas** (DBCP, ojdbc, Jersey) enquanto o sistema estiver em produção e sem suíte de testes.
-* Cada entrega deve incluir **evidências manuais** (requisições e respostas) e validação de **todas** as variantes de idioma afetadas.
-
----
-
-## Licença / Compliance
-
-Este repositório é **interno**. Avalie políticas corporativas para redistribuição, dados sensíveis e logs antes de publicar artefatos.
+    UUID processCotacao(UUID multiOfertaId, UUID cotacaoId, BaseCotacaoRequest request);
+}
