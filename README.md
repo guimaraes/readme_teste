@@ -1,100 +1,187 @@
-# sboot-reem-resi-api-unica — integração com java-lib-reem-resi-core-multicalculo
+# DEVPLAN — Desacoplamento da `java-lib-reem-resi-core-multicalculo` do `java-lib-reem-resi-commons-dto`
 
-Documento para replicar no **projeto original** o que este workspace já alinhou entre a API única, a lib core de multicalculo, o `commons-dto` e o `commons`.
+## 1. Contexto e decisão da liderança
 
-## 1. Dependência Maven
+### 1.1 Síntese do diálogo (Tech Lead)
 
-| O quê | Onde |
-|--------|------|
-| Propriedade `resi-core-multicalculo.version` (ex.: `1.0-SNAPSHOT`) | [sboot-reem-resi-api-unica/pom.xml](sboot-reem-resi-api-unica/pom.xml) |
-| Dependência `com.porto.resi:java-lib-reem-resi-core-multicalculo` | Mesmo `pom.xml`, junto de `java-lib-reem-resi-commons-dto` e `java-lib-reem-resi-commons` |
+| Participante | Mensagem-chave |
+|----------------|----------------|
+| Liderança | Referências à `commons-dto` dentro da core-multicalculo não são desejáveis; não levar essa lib para dentro da outra. |
+| Liderança | Proposta inicial: extrair **classes base** do `commons-dto` para a **lib-core** e manter **classes filhas** apenas na **api-unica**, para matar acoplamento com `commons-dto`. A core é **template** da api-unica **sem depender de produto** (residencial, essencial). |
+| Liderança | Exemplo desejado: um serviço Spring Boot **do zero** importa só a lib-core, define **seus** DTOs, implementa **suas** interfaces e já consegue um fluxo de cálculo. |
+| Liderança | Refinamento: as bases **não seriam compartilhadas** com outros sistemas; ficariam **só na lib-core**. Opinião forte: `commons-dto` “nunca deveria existir”, só gera acoplamento, pouca utilidade percebida. |
+| Time (você) | Core como **mecanismo** (ports, delegate, registry, reserva, notificação), sem produto e, se possível, **sem** o pacote pesado de contratos do `commons-dto`, para não amarrar **release da core** à evolução de **todos** os DTOs. |
+| Time (você) | Se as bases ainda forem contrato com BFF/outros, não duplicar sem critério: ou módulo **fino** só de contratos, ou core com **interfaces / tipos mínimos** (canal, orçamento, ids) e **api-unica mapeia na borda** o `BaseCotacaoRequest` do `commons-dto` → tipos da core, **sem** a core depender do `commons-dto` e **sem** quebrar a fonte única do JSON na entrada HTTP. |
+| Liderança | **“Sim, pode seguir nessa linha.”** |
 
-A API continua usando **interfaces da lib** no pacote `com.porto.resi.service` (`CotacaoProcessor`, `CotacaoProcessorForUpdate`), vindas do JAR da core-multicalculo.
+### 1.2 Decisão consolidada (o que “seguir nessa linha” significa em engenharia)
 
-## 2. Configuração Spring
+1. **Remover dependência Maven** de `java-lib-reem-resi-commons-dto` da `java-lib-reem-resi-core-multicalculo`.
+2. A core expõe **tipos mínimos próprios** (records, interfaces ou classes leves **sem** anotações Jackson de contrato HTTP, **sem** validações que puxem `java-lib-reem-resi-commons`, **sem** OpenAPI acoplado ao jar da core), contendo **apenas** o que os templates usam hoje: canal, número de orçamento externo, flags de recálculo, ids (`UUID`), e o payload mínimo de callback gravável.
+3. A **api-unica** (e qualquer outro host) continua sendo o lugar de **contrato de integração** (REST, JSON, Bean Validation, Swagger): pode continuar usando `commons-dto` **temporariamente** na camada de controller/DTO de entrada, e aplica **mapeamento explícito na borda** para os tipos da core antes de chamar delegate/processor/notifier.
+4. **Produto-específico** (residencial, essencial, imobiliário): DTOs filhos, mappers e implementações de ports **permanecem na api-unica** (ou em módulos de produto futuros), não na core.
+5. A visão de **“serviço do zero + core”** fica atendida: um terceiro projeto não precisa do `commons-dto`; só da core + seus próprios DTOs + implementações.
 
-| Classe | Função |
-|--------|--------|
-| [com.porto.resi.config.MulticalculoCoreConfiguration](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/config/MulticalculoCoreConfiguration.java) | Declara dois beans `ProductRegistry`: um para `CotacaoProcessor` e outro para `CotacaoProcessorForUpdate` (hoje instanciados **vazios**; no projeto original falta **registrar** implementações com `ProductRegistries`). |
+### 1.3 Alinhamento com a frase “bases na core, filhas na API”
 
-## 3. Camada “adapter” para ports da lib
+Há duas leituras possíveis:
 
-A lib expõe ports; a API implementa com **lambdas** ou **serviços Spring**.
+| Leitura | Onde fica o “contrato HTTP” |
+|---------|-----------------------------|
+| A) **Duplicar** bases na core (espelho do que hoje está no commons-dto) | Risco de divergência com BFF se ambos serializarem o mesmo JSON com tipos diferentes. |
+| B) **Tipos mínimos de domínio do multicalculo** na core (não são o DTO REST público) | Contrato HTTP continua **só** na api-unica (ou módulo de API); core não serializa o corpo da requisição pública. |
 
-### 3.1 Fluxo de cotação (serviço)
-
-| Classe | Integração com a lib |
-|--------|----------------------|
-| [com.porto.resi.service.impl.AbstractCotacaoProdutoService](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/impl/AbstractCotacaoProdutoService.java) | Usa `CotacaoProdutoServiceDelegate` da lib. `CallbackGravacaoPort` = `CotacaoCallbackService::gravar`. `ValidacaoCanalPort` = lambda que chama `ValidacaoCanalService.validarCanal` quando `validarCanal` for true. Converte `CotacaoRecebidaResult` em [CotacaoRecebidaResponse](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/domain/dto/rest/response/CotacaoRecebidaResponse.java) via builder (`multiOfertaId`, `ofertaId`). |
-| [com.porto.resi.service.CotacaoCallbackService](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/CotacaoCallbackService.java) | Contrato `gravar(multiOfertaId, BaseCotacaoCallbackRequest)` alinhado ao port de callback da lib. |
-| [com.porto.resi.service.impl.CotacaoCallbackServiceImpl](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/impl/CotacaoCallbackServiceImpl.java) | Implementação real de persistência/execução de callback (mapper, repositório, client HTTP assíncrono, métricas). |
-| [com.porto.resi.service.ValidacaoCanalService](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/ValidacaoCanalService.java) | Inclui `validarCanal(Integer codigoCanal)` usado pelo delegate. |
-| [com.porto.resi.service.impl.ValidacaoCanalServiceImpl](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/impl/ValidacaoCanalServiceImpl.java) | Implementação com repositório/cache/contexto de segurança. |
-
-### 3.2 Fluxo de criação de cotações com reserva (processor)
-
-| Classe | Integração com a lib |
-|--------|----------------------|
-| [com.porto.resi.service.impl.AbstractCotacaoProdutoProcessor](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/impl/AbstractCotacaoProdutoProcessor.java) | `CotacaoProdutoProcessorSupport.criarCotacoesComReserva`: `CorrelationIdStrategies.uuidAleatorioPorOferta()`, fábrica de [ReservaNumeroOrcamentoRequest](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/domain/dto/client/request/orcamento/ReservaNumeroOrcamentoRequest.java), `OrcamentoClient.reservarNumeroOrcamento(...).join()`, batch via `CotacaoCreator.createCotacoes` com [ListaInteligenciaOfertaResidencialResponseImpl](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/domain/dto/client/response/ListaInteligenciaOfertaResidencialResponseImpl.java). `CotacaoNotificacaoSupport.notificarNovasCotacoes` para o [CotacaoNotifier](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/CotacaoNotifier.java). |
-| [com.porto.resi.client.OrcamentoClient](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/client/OrcamentoClient.java) | Port HTTP assíncrono (`CompletableFuture`) para reserva de número de orçamento. |
-| [com.porto.resi.client.config.OrcamentoClientConfig](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/client/config/OrcamentoClientConfig.java) | Configuração do client (replicar wiring no projeto original). |
-| [com.porto.resi.service.CotacaoCreator](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/CotacaoCreator.java) | Contrato com `EnriquecimentoResponse` (commons-dto), `BaseInteligenciaOfertaResponse`, `ReservaNumeroOrcamentoResponse`, entidade `Cotacao`. |
-| [com.porto.resi.domain.dto.client.response.orcamento.ReservaNumeroOrcamentoResponse](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/domain/dto/client/response/orcamento/ReservaNumeroOrcamentoResponse.java) | DTO de resposta da reserva (neste snapshot pode estar mínimo; no original preencher campos reais). |
-
-### 3.3 Notifier
-
-| Classe | Integração com a lib |
-|--------|----------------------|
-| [com.porto.resi.service.CotacaoNotifier](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/CotacaoNotifier.java) | Estende `CotacaoNotifierPort<Cotacao>` da lib. |
-| [com.porto.resi.service.impl.AbstractCotacaoNotifier](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/service/impl/AbstractCotacaoNotifier.java) | Estende `AbstractCotacaoNotifierTemplate<T, M, Cotacao>` da lib. |
-
-### 3.4 Callback (mapeamento e infra)
-
-| Classe | Nota |
-|--------|------|
-| [com.porto.resi.mapper.CotacaoCallbackMapper](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/mapper/CotacaoCallbackMapper.java) (+ Impl) | `BaseCotacaoCallbackRequest` → entidade/DTOs de callback. |
-| [com.porto.resi.repository.CotacaoCallbackRepository](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/repository/CotacaoCallbackRepository.java) (+ Impl) | Persistência do callback. |
-| [com.porto.resi.client.CotacaoCallbackClient](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/client/CotacaoCallbackClient.java) (+ Impl, [CotacaoCallbackClientConfig](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/client/config/CotacaoCallbackClientConfig.java)) | Execução HTTP do webhook. |
-
-## 4. Contratos de domínio usados pelo processor
-
-- [BaseInteligenciaOfertaResponse](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/domain/dto/client/response/BaseInteligenciaOfertaResponse.java) (interface API).
-- [ListaInteligenciaOfertaResidencialResponseImpl](sboot-reem-resi-api-unica/src/main/java/com/porto/resi/domain/dto/client/response/ListaInteligenciaOfertaResidencialResponseImpl.java) — adapta `List<InteligenciaOfertaResidencialResponse>` do **commons-dto** para o `CotacaoCreator`.
-
-## 5. O que ainda não está fechado neste snapshot (para o checklist)
-
-Os registries existem mas **não são populados**; não há uso de `ProductRegistries` nem beans `IdentifiedCotacaoProcessor`. Vários `*ServiceImpl` / `*ProcessorImpl` de produto podem estar **vazios** ou incompletos — o checklist abaixo cobre o desenvolvimento no projeto original.
+A linha aprovada pelo diálogo final corresponde à **leitura B**: a core não “substitui” o `commons-dto` como contrato de wire; ela **substitui** o uso do `commons-dto` como **dependência de compilação** da core. A opinião da liderança sobre o `commons-dto` no longo prazo fica registrada na secção 8 (estratégia corporativa), sem bloquear a fase 1.
 
 ---
 
-## Checklist — o que desenvolver / completar no projeto original
+## 2. Estado atual (inventário técnico)
 
-### Integração core-multicalculo na API
+### 2.1 Dependência Maven
 
-- [ ] Garantir dependência Maven `java-lib-reem-resi-core-multicalculo` e versão alinhada ao artefato publicado.
-- [ ] Copiar/ajustar `MulticalculoCoreConfiguration` e **registrar** processadores com `ProductRegistries.registrarIdentificados` e `registrarIdentificadosForUpdate` a partir de beans `Identified*`.
-- [ ] Implementar classes de produto como `IdentifiedCotacaoProcessor` / `IdentifiedCotacaoProcessorForUpdate` com `codigoProdutoMulticalculo()` coerente com `MulticalculoProducts` na lib.
-- [ ] Refatorar fluxos que hoje passam `CotacaoProcessor` manualmente para **resolver** via `ProductRegistry` (produto/canal).
-- [ ] (Opcional) Bean `TelemetryBridge` na aplicação e, se desejado, instrumentar pontos do fluxo.
+- [java-lib-reem-resi-core-multicalculo/pom.xml](pom.xml): dependência direta em `java-lib-reem-resi-commons-dto`.
 
-### Adapters e domínio já esboçados
+### 2.2 Uso de pacotes `com.porto.resi.commons.dto...` no código da core (compilação)
 
-- [ ] Implementação concreta de `OrcamentoClient` (Feign/WebClient/etc.) e testes de contrato.
-- [ ] Completar `ReservaNumeroOrcamentoResponse` e qualquer mapeamento de resposta real do serviço de orçamento.
-- [ ] Implementações de `CotacaoCreator` / notifiers por produto (classes que estendem `AbstractCotacaoNotifier` / usam `AbstractCotacaoProdutoProcessor`).
-- [ ] Serviços de cotação que estendem `AbstractCotacaoProdutoService` e chamam `processarCotacoes` / `processarCotacao` com o processador adequado (via registry após refatoração).
+| Artefacto | Tipos do commons-dto |
+|-----------|----------------------|
+| `CotacaoProcessor`, `CotacaoProcessorForUpdate` | `BaseCotacaoRequest` |
+| `CotacaoProdutoServiceDelegate` | `BaseCotacaoRequest`, `BaseCotacaoCallbackRequest` |
+| `CallbackGravacaoPort` | `BaseCotacaoCallbackRequest` |
+| `CotacaoNotifierPort`, `AbstractCotacaoNotifierTemplate`, `CotacaoNotificacaoSupport` | `BaseCotacaoRequest` |
+| `CotacaoProdutoProcessorSupport`, `CotacaoBatchFactory`, `ReservaPedidoFactory` | `BaseCotacaoRequest` |
+| Testes unitários | Mesmos tipos |
 
-### Callback e canal
+Não há hoje referência a `EnriquecimentoResponse` ou DTOs de oferta **dentro** do código principal da core (o genérico `E` no processor já isola enriquecimento); o acoplamento crítico é **`BaseCotacaoRequest`** e **`BaseCotacaoCallbackRequest`**.
 
-- [ ] Validar `CotacaoCallbackServiceImpl.gravar` e fluxo `executar` com ambiente real (URL, secret, filtros, métricas).
-- [ ] Revisar `ValidacaoCanalServiceImpl` (self-injection `@Lazy` para cache) e regras de negócio de canal.
+---
 
-### Qualidade e alinhamento de versões
+## 3. Objetivos mensuráveis
 
-- [ ] `mvn clean verify` na API com a versão da lib instalada/publicada.
-- [ ] Alinhar `java-lib-reem-resi-commons-dto` (e `commons`) entre agregador Maven, CI e Nexus para evitar conflito de versões no classpath.
-- [ ] Testes de integração dos fluxos BFF → API → clients.
+| ID | Objetivo | Critério de aceite |
+|----|-----------|-------------------|
+| O1 | Core **sem** dependência `java-lib-reem-resi-commons-dto` | `mvn dependency:tree` na core não lista `commons-dto`. |
+| O2 | Core **sem** dependência `java-lib-reem-resi-commons` | Nenhum tipo da core referencia validações do commons no classpath da core. |
+| O3 | Templates compilam só com tipos **core** + SLF4J (+ test scope Boot se mantido). | `mvn -q test` na core verde. |
+| O4 | Api-unica continua expondo contratos atuais (ou plano de migração documentado) | Testes de contrato / regressão acordados com time de integração. |
+| O5 | Exemplo “serviço do zero” documentado | Secção no README ou neste DEVPLAN com pacotes mínimos e interfaces a implementar. |
 
-### commons / commons-dto (referência)
+---
 
-- [ ] Manter DTOs e validações no **commons-dto** / **commons**; a core-multicalculo não substitui esses módulos — só os consome.
+## 4. Desenho alvo (detalhado)
+
+### 4.1 Novos tipos na core (nomes sugeridos — ajustar ao padrão do time)
+
+Pacote sugerido: `com.porto.resi.core.multicalculo.model` (ou `...domain`).
+
+| Tipo | Responsabilidade | Campos mínimos (derivados do uso atual) |
+|------|-------------------|----------------------------------------|
+| `CotacaoOperacaoContext` (ou nome equivalente) | Substituir genericamente o papel de `BaseCotacaoRequest` **dentro** da core | `Integer codigoCanal`, `Long numeroOrcamentoExterno` (nome alinhado ao getter atual `getNumeroOrcamento()`), demais campos **somente** se algum método da cadeia atual os ler (auditar `ReservaNumeroOrcamentoRequest` factory e delegate). |
+| `CotacaoCallbackGravacaoInput` (record) | Substituir `BaseCotacaoCallbackRequest` no port `CallbackGravacaoPort` | Campos usados pelo fluxo de gravar: `verbo`, `statusCode`, `secret`, `url` — espelho **lógico**, sem `@Schema` / `@ValidHttpVerbo` na core. |
+| Opcional: `CotacaoCallbackGravacaoPort` genérico | Se no futuro o callback carregar payload opaco | `void gravar(UUID multiOfertaId, Map<String,Object> payload)` — só se a liderança quiser máximo desacoplamento; senão manter record explícito. |
+
+**Genéricos:** onde hoje existe `<T extends BaseCotacaoRequest>`, passar a `<C extends CotacaoOperacaoContext>` (ou interface `CotacaoOperacaoContext` implementada na API por um adapter/wrapper).
+
+### 4.2 Interfaces de processamento
+
+- `CotacaoProcessor` / `CotacaoProcessorForUpdate`: assinaturas passam a usar `CotacaoOperacaoContext` (ou o nome final), **não** `BaseCotacaoRequest`.
+- Implementações na api-unica recebem DTOs REST e ou implementam a interface recebendo já o tipo core (preferível: **adapter** que implementa `CotacaoProcessor` e recebe dependências produto-internas).
+
+### 4.3 Ports
+
+- `CallbackGravacaoPort.gravar(UUID, CotacaoCallbackGravacaoInput)` — tipo core.
+- `CotacaoNotifierPort` / template: método que hoje recebe `BaseCotacaoRequest` passa a receber `CotacaoOperacaoContext` (ou superinterface mínima).
+
+### 4.4 Borda na api-unica
+
+| Componente | Ação |
+|--------------|------|
+| Controllers / DTOs de entrada | Podem continuar com `BaseCotacaoRequest` do `commons-dto` **até** decisão de trocar o contrato HTTP. |
+| Mapper dedicado | `CotacaoCoreMapper` (nome exemplo): `BaseCotacaoRequest` → `CotacaoOperacaoContext`; `BaseCotacaoCallbackRequest` → `CotacaoCallbackGravacaoInput`. |
+| `AbstractCotacaoProdutoService` | Após mapeamento, chama `CotacaoProdutoServiceDelegate` com tipos core. |
+| `AbstractCotacaoProdutoProcessor` / `CotacaoCreator` | `CotacaoCreator` hoje usa `BaseCotacaoRequest`; ou o creator recebe tipo core, ou permanece na API com assinatura commons-dto e só a chamada ao `CotacaoProdutoProcessorSupport` usa tipo core — **decisão de fase**: minimizar duplicação escolhendo **um** ponto de conversão (preferencialmente na entrada do serviço de aplicação). |
+
+### 4.5 Testes da core
+
+- Substituir fixtures que hoje instanciam subclasses de `BaseCotacaoRequest` por **records** ou builders de `CotacaoOperacaoContext` **dentro** da core.
+- Nenhum import `com.porto.resi.commons.dto` nos testes da core.
+
+---
+
+## 5. Plano de fases (minucioso)
+
+### Fase 0 — Preparação (sem mudança de comportamento)
+
+- [ ] Listar **todos** os getters de `BaseCotacaoRequest` usados indiretamente pela core (grep em `java-lib-reem-resi-core-multicalculo` e em subclasses na api-unica que alimentam o delegate).
+- [ ] Idem para `BaseCotacaoCallbackRequest`.
+- [ ] Documentar no PR/commit a matriz campo-a-campo: commons-dto → tipo core.
+
+### Fase 1 — Introduzir tipos core (additive)
+
+- [ ] Criar pacote `...core.multicalculo.model` com records/interfaces acordados.
+- [ ] Adicionar **sobrecargas** ou novos métodos internos que aceitam tipos core **em paralelo** aos antigos (opcional, se quiser migração incremental); **ou** big-bang na core com quebra de API do jar (definir versionamento semver: **2.0.0** se já houve release consumido).
+
+### Fase 2 — Refatorar a core para tipos próprios
+
+- [ ] Alterar `CotacaoProcessor`, `CotacaoProcessorForUpdate`, delegate, ports, notifier template, processor support, factories.
+- [ ] Remover dependência `commons-dto` do `pom.xml` da core.
+- [ ] Ajustar todos os testes da core.
+- [ ] `mvn clean install` na core.
+
+### Fase 3 — Api-unica (borda)
+
+- [ ] Implementar mappers commons-dto → tipos core.
+- [ ] Ajustar `AbstractCotacaoProdutoService`, `AbstractCotacaoProdutoProcessor`, notifiers, services concretos, `CotacaoCallbackService` se a assinatura pública `gravar` continuar em commons-dto (mapper na primeira linha do método).
+- [ ] Ajustar `MulticalculoCoreConfiguration` e beans `Identified*` para novas assinaturas.
+- [ ] `mvn clean verify` na api-unica.
+
+### Fase 4 — Regressão e governança
+
+- [ ] Testes de integração / contrato com BFF (se existirem).
+- [ ] Atualizar [DEVPLAN-core-multicalculo.md](DEVPLAN-core-multicalculo.md): remover menção a dependência obrigatória de commons-dto na core; referenciar este documento.
+- [ ] Comunicar versão nova da core aos consumidores (breaking change se aplicável).
+
+### Fase 5 (opcional / estratégico) — Posição sobre `commons-dto`
+
+- [ ] Workshop com arquitetura: a frase “commons-dto nunca deveria existir” implica **descontinuar** o artefato corporativo ou **restringir** a APIs legadas apenas na api-unica até migração total.
+- [ ] Se descontinuar: plano de migração dos outros consumidores do `commons-dto` (fora do escopo deste DEVPLAN, mas **bloqueia** remoção global).
+
+---
+
+## 6. Riscos e mitigações
+
+| Risco | Mitigação |
+|-------|-----------|
+| Esquecer um campo usado só em runtime na reserva | Matriz na Fase 0 + teste de integração na api-unica com payload real. |
+| Duplicação semântica entre JSON público e modelo core | Uma única camada de mapper na borda; testes de mapper com fixtures JSON. |
+| Breaking change para quem já consumiu a core 1.x | Bump de versão major; release notes. |
+| `BaseCotacaoRequest` no commons-dto referencia validações do `commons` | Core **não** replica essas anotações; validação permanece na api-unica antes do map. |
+
+---
+
+## 7. Checklist rápido (TL;DR)
+
+- [ ] Tipos mínimos na core (`CotacaoOperacaoContext`, `CotacaoCallbackGravacaoInput`, …).
+- [ ] Refatorar todas as referências `BaseCotacaoRequest` / `BaseCotacaoCallbackRequest` na core.
+- [ ] Remover `java-lib-reem-resi-commons-dto` do `pom` da core.
+- [ ] Mappers na api-unica.
+- [ ] Ajustar implementações e testes da api-unica.
+- [ ] Versionamento e comunicação de breaking change.
+- [ ] Atualizar documentação e alinhar roadmap do `commons-dto` com arquitetura.
+
+---
+
+## 8. Nota de alinhamento com a opinião da liderança sobre `commons-dto`
+
+O pedido aprovado (“core sem commons-dto + mapeamento na borda”) **não exige**, por si só, a **extinção imediata** do artefato `java-lib-reem-resi-commons-dto` em todo o ecossistema. Cumpre o objetivo de **desacoplar a core** e permitir o exemplo “serviço do zero”. A **extinção** do `commons-dto` é uma **decisão de portfólio** (vários consumidores, BFFs, versões publicadas) e deve ser tratada como **épico separado**, com este DEVPLAN como pré-requisito ou facilitador.
+
+---
+
+## 9. Referências internas
+
+- Core atual: [CotacaoProdutoServiceDelegate](src/main/java/com/porto/resi/core/multicalculo/service/CotacaoProdutoServiceDelegate.java), [CallbackGravacaoPort](src/main/java/com/porto/resi/core/multicalculo/port/CallbackGravacaoPort.java), processors e notifier sob `src/main/java/com/porto/resi/core/multicalculo/`.
+- DEVPLAN anterior de arquitetura: [DEVPLAN-core-multicalculo.md](DEVPLAN-core-multicalculo.md).
+
+---
+
+*Documento gerado para refletir conversa com liderança e direção técnica aprovada: **tipos mínimos na core, mapeamento na api-unica, core sem dependência do commons-dto**.*
