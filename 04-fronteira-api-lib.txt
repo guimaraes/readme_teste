@@ -1,0 +1,28 @@
+title Fronteira sboot-reem-resi-api-unica x java-lib-reem-resi-core-multicalculo
+
+box sboot-reem-resi-api-unica #LightYellow
+participant Hook as Webhook CotacaoCallbackClient
+participant ValCanal as Validacao canal adapter
+participant ProdResi as Modulo Residencial
+participant ProdEss as Modulo Essencial
+participant ProdImo as Modulo Imobiliaria
+participant ProdCons as Producer Consumer
+end box
+
+box java-lib-reem-resi-core-multicalculo #LightGreen
+participant CliEnr as Client enriquecimento
+participant CliRes as Client reserva orcamento
+participant CliOf1 as ModuloOfertasClient
+participant CliOf2 as MotorModuloOfertasClient
+participant CliOrq as Client orquestracao
+participant DTOs as DTOs base
+participant Proc as Processor templates ports registry
+end box
+
+ProdResi->Proc: depende da lib
+ProdEss->Proc: depende da lib
+ProdImo->Proc: depende da lib
+Proc->CliOrq: client orquestracao
+
+note over ProdCons: nao migra para lib\n(decisao TL)
+note over Hook,ValCanal: adapters permanecem na API

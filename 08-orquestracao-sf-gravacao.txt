@@ -1,0 +1,37 @@
+title Orquestracao interna Step Functions e fluxo gravacao
+
+participant SF as Step Functions
+participant ODM_AC as ODM Atribuir Condicoes
+participant ODM_AR as ODM Aceitar Risco
+participant MOTOR as Motor Calculo
+participant VAL_O as Validar Oferta
+participant CAD_P as Cadastrar Pessoa
+participant VAL_C as Validar Corretor
+participant SALDO as Consulta Saldo Cotaweb
+participant ORC as Orcamentos
+participant GCP as GCP
+
+SF->ODM_AC: inicio paralelo
+SF->VAL_O: inicio paralelo
+SF->CAD_P: inicio paralelo
+SF->VAL_C: inicio paralelo
+SF->SALDO: inicio paralelo
+
+ODM_AC->ODM_AR: sequencial
+ODM_AC->MOTOR: ramo calculo
+
+par Ramo ODM
+  ODM_AR-->SF: concluido
+and Ramo Motor
+  MOTOR-->SF: concluido
+and Ramo validacoes
+  VAL_O-->SF: concluido
+  CAD_P-->SF: concluido
+  VAL_C-->SF: concluido
+  SALDO-->SF: concluido
+end
+
+SF->ORC: apos tarefas
+ORC->GCP: fluxo gravacao
+
+note over SF: Papel da lib: clients configuraveis\nSF/ODM/GCP permanecem fora do jar

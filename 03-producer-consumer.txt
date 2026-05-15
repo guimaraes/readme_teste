@@ -1,0 +1,12 @@
+title Padrao producer consumer (fora da lib-core)
+
+participant Proc as Processor API
+participant Lib as Lib Core NotifierTemplate
+participant Port as CotacaoNotifierPort
+participant Prod as CotacaoResidencialProducer API
+
+Proc->Lib: notificarNovasCotacoes()
+Lib->Port: notificar()
+Port->Prod: publish mensagem
+
+note over Prod: Implementacao na API\n(classe simples + fila SQS/SNS)

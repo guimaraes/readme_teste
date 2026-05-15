@@ -1,0 +1,56 @@
+title Fluxo orcamento - entrada ate servicos externos
+
+participant GW as Gateway Mule
+participant Cat as Catalogo de Canal
+participant BFF as BFF Multicotador
+participant API as API Residencial
+participant Lib as Lib Core
+participant CliEnr as Client enriquecimento
+participant CliRes as Client reserva orcamento
+participant CliMOF as ModuloOfertasClient
+participant CliMotor as MotorModuloOfertasClient
+participant CliOrq as Client orquestracao
+participant Ser as Serasa
+participant GP as Guia Postal
+participant RNS as RNS
+participant Per as Perfil
+participant ResExt as Servico Reserva Orcamentos
+participant MOFExt as Modulo Ofertas legado
+participant MotorExt as Motor Ofertas homolog
+participant SF as Step Functions
+
+GW->Cat: consulta canal
+GW->BFF: request cotacao
+BFF->API: forward
+
+API->Lib: processar cotacao
+
+Lib->CliEnr: enriquecer
+CliEnr->Ser: consulta
+CliEnr->GP: consulta
+CliEnr->RNS: consulta
+CliEnr->Per: consulta
+Ser-->CliEnr: resposta
+GP-->CliEnr: resposta
+RNS-->CliEnr: resposta
+Per-->CliEnr: resposta
+
+Lib->CliRes: reservar numero
+CliRes->ResExt: HTTP reserva
+ResExt-->CliRes: numero reservado
+
+Lib->CliMOF: enquadrar oferta legado
+CliMOF->MOFExt: HTTP
+MOFExt-->CliMOF: ofertas
+
+Lib->CliMotor: enquadrar oferta motor
+CliMotor->MotorExt: HTTP
+MotorExt-->CliMotor: ofertas
+
+Lib->CliOrq: iniciar orquestracao
+CliOrq->SF: StartExecution
+
+SF-->API: retorno SF
+API->BFF: webhook (CotacaoCallbackClient)
+
+note over API,BFF: Retorno SF + Webhook para BFF

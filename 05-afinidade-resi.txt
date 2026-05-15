@@ -1,0 +1,25 @@
+title Afinidade de produtos RESI (BFF para API)
+
+participant GW as Gateway Mule
+participant BFF_MC as BFF Multicotador
+participant BFF_Hub as BFF Hub
+participant BFF_Par as BFF Parceiros
+participant BFF_Canal as BFF Canal
+participant API as API Residencial
+participant ModResi as Modulo Residencial
+participant ModEss as Modulo Essencial
+participant ModImo as Modulo Imobiliaria
+
+GW->BFF_MC: roteamento
+GW->BFF_Hub: roteamento
+GW->BFF_Par: roteamento
+GW->BFF_Canal: roteamento
+
+BFF_MC->API: chamada HTTP
+BFF_Hub->API: chamada HTTP
+BFF_Par->API: chamada HTTP
+BFF_Canal->API: chamada HTTP
+
+API->ModResi: modulo produto
+API->ModEss: modulo produto
+API->ModImo: modulo produto

@@ -1,0 +1,20 @@
+title Step Functions por produto
+
+participant API as API Residencial
+participant MR as Modulo Residencial
+participant ME as Modulo Essencial
+participant MI as Modulo Imobiliaria
+participant SFR as Step Functions Residencial
+participant SFE as Step Functions Essencial
+participant SFI as Step Functions Imobiliaria
+
+API->MR: processar produto Residencial
+MR->SFR: StartExecution
+
+API->ME: processar produto Essencial
+ME->SFE: StartExecution
+
+API->MI: processar produto Imobiliaria
+MI->SFI: StartExecution
+
+note over SFR,SFI: Uma SF por produto\n(afinidade RESI)

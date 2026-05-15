@@ -1,0 +1,55 @@
+title Lib-Core no ecossistema RESI
+
+box Experiencia #AliceBlue
+participant GW as Gateway Mule
+participant BFF_MC as BFF Multicotador
+participant BFF_Hub as BFF Hub
+participant BFF_Par as BFF Parceiros
+participant BFF_Canal as BFF Canal
+end box
+
+box API Residencial api-unica #LightYellow
+participant ModResi as Modulo Residencial
+participant ModEss as Modulo Essencial
+participant ModImo as Modulo Imobiliaria
+participant Msg as Producer Consumer
+participant Adapters as Callback Validacao Persistencia
+end box
+
+box Lib Core #LightGreen
+participant CliEnr as Client enriquecimento
+participant CliRes as Client reserva orcamento
+participant CliMOF as ModuloOfertasClient legado
+participant CliMotor as MotorModuloOfertasClient
+participant CliOrq as Client orquestracao
+participant DTOs as DTOs base minimos
+participant Proc as Processor ports registry
+end box
+
+box Externos #MistyRose
+participant EnrExt as Serasa GuiaPostal RNS Perfil
+participant ResExt as Reserva Orcamentos
+participant OfExt as Modulo Ofertas
+participant SF as Step Functions por produto
+end box
+
+GW->BFF_MC: request
+BFF_MC->ModResi: chamada API
+
+ModResi->Proc: orquestracao in-process
+Proc->CliEnr: enriquecer
+CliEnr->EnrExt: HTTP
+Proc->CliRes: reservar
+CliRes->ResExt: HTTP
+Proc->CliMOF: oferta legado
+CliMOF->OfExt: HTTP
+Proc->CliMotor: oferta motor
+CliMotor->OfExt: HTTP
+Proc->CliOrq: orquestracao SF
+CliOrq->SF: StartExecution
+
+ModResi->SF: disparo SF Residencial
+ModEss->SF: disparo SF Essencial
+ModImo->SF: disparo SF Imobiliaria
+
+note over Msg: Producer/Consumer\npermanecem na API\n(fora da lib)
