@@ -47,14 +47,46 @@ Extrair para **`java-lib-reem-resi-core-multicalculo`** o núcleo reutilizável 
 
 ### 1.3 Visão alvo (fluxo orçamento)
 
-```text
-Experience (Gateway Mule → BFFs)
-    → API-Residencial (módulos Residencial / Essencial / Imobiliária)
-        → Lib-Core (clients genéricos + DTOs-base + processor)
-            → Serviços externos (enriquecimento, reserva, ofertas)
-            → Step Functions (orquestração por produto)
-        → Retorno SF / Webhook → BFF
-    → Fluxo gravação (Orçamentos, GCP)
+```mermaid
+flowchart TB
+  GW[Gateway Mule]
+  BFF[BFFs]
+  API[API-Residencial]
+
+  subgraph modulos [Modulos de produto]
+    MR[Residencial]
+    ME[Essencial]
+    MI[Imobiliaria]
+  end
+
+  subgraph libCore [Lib-Core]
+    CLI[Clients genericos]
+    DTO[DTOs-base]
+    PROC[Processor]
+  end
+
+  subgraph externos [Servicos externos]
+    ENR[Enriquecimento]
+    RES[Reserva orcamentos]
+    OFE[Ofertas]
+  end
+
+  SF[Step Functions por produto]
+  GRAV[Fluxo gravacao]
+  ORC[Orcamentos]
+  GCP[GCP]
+
+  GW --> BFF
+  BFF --> API
+  API --> modulos
+  modulos --> libCore
+  libCore --> externos
+  modulos --> SF
+  SF -->|Retorno SF| API
+  API -->|Webhook| BFF
+  SF --> GRAV
+  GRAV --> ORC
+  ORC --> GCP
 ```
 
 ### 1.4 Padrão de referência (squad)
