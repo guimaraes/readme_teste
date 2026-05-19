@@ -1,31 +1,3 @@
-title Visao alvo - Fluxo orcamento RESI
+feat(api-unica): integrar lib-core multicalculo
 
-participant GW as Gateway Mule
-participant BFF as BFFs
-participant API as API-Residencial
-participant Lib as Lib-Core
-participant Ext as Servicos externos
-participant SF as Step Functions
-participant Grav as Fluxo gravacao
-
-GW->BFF: entrada experiencia
-BFF->API: solicitacao cotacao\n(Modulos Residencial / Essencial / Imobiliaria)
-
-API->Lib: processar\n(clients genericos + DTOs-base + processor)
-
-par Integracoes genericas
-  Lib->Ext: enriquecimento\n(Serasa, Guia Postal, RNS, Perfil)
-  Ext-->Lib: dados enriquecidos
-  Lib->Ext: reserva orcamento
-  Ext-->Lib: numero reservado
-  Lib->Ext: modulo de ofertas
-  Ext-->Lib: ofertas enquadradas
-end
-
-Lib->SF: orquestracao por produto
-SF-->API: retorno SF
-API->BFF: webhook callback
-
-API->Grav: persistir resultado
-Grav->Grav: Orcamentos
-Grav->Grav: GCP
+Substitui AbstractCotacaoProdutoService, AbstractCotacaoProdutoProcessor e AbstractCotacaoNotifier pelos equivalentes da lib (CotacaoProdutoServiceDelegate, CotacaoProdutoProcessorSupport, AbstractCotacaoNotifierTemplate). Services usam CotacaoCoreMapper e CotacaoRequestHolder; processors e notifiers adotam CotacaoOperacaoContext; OrcamentoClient unificado com DTOs da lib; fluxos Essencial e Imobiliária ajustados; CotacaoNotifier alinhado a CotacaoNotifierPort.
